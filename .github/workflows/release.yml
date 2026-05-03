@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and Publish Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Create release package
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}"
+          $packageName = "R2Share-$version-windows-x64"
+          $packageDir = Join-Path "dist" $packageName
+          $zipPath = Join-Path "dist" "$packageName.zip"
+
+          New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
+
+          Copy-Item "target/release/R2Share.exe" $packageDir -Force
+          Copy-Item "README.md" $packageDir -Force
+          Copy-Item "LICENSE" $packageDir -Force
+          Copy-Item "r2share.toml.example" $packageDir -Force
+
+          if (Test-Path $zipPath) {
+            Remove-Item $zipPath -Force
+          }
+
+          Compress-Archive -Path $packageDir -DestinationPath $zipPath -Force
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true
