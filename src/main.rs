@@ -170,6 +170,7 @@ async fn upload_file(
     let file_size = fs::metadata(path)
         .with_context(|| format!("Failed to read metadata for '{}'.", path.display()))?
         .len();
+    let content_length = i64::try_from(file_size).context("File is too large to upload.")?;
     let content_type = guess_content_type(path);
     let content_disposition = select_content_disposition(&content_type);
     let object_key = build_object_key(config, path);
@@ -181,6 +182,7 @@ async fn upload_file(
         .bucket(&config.bucket)
         .key(&object_key)
         .body(body)
+        .content_length(content_length)
         .content_type(content_type.clone())
         .content_disposition(content_disposition)
         .cache_control(CACHE_CONTROL)
