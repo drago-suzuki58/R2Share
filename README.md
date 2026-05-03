@@ -1,124 +1,136 @@
-# R2Share
+<h1 align="center">R2Share</h1>
 
-R2Share は、Cloudflare R2 にファイルをアップロードして公開 URL を取得する小さな Rust 製ツールです。
+<p align="center">
+  Drag a file onto a small Windows executable. R2Share uploads it to Cloudflare R2, prints the public URL, and copies that URL to your clipboard.
+</p>
 
-Windows では `R2Share.exe` にファイルをドラッグ＆ドロップするだけで使えます。アップロード後、生成された公開 URL はコンソールに表示され、クリップボードにもコピーされます。
+<p align="center">
+  <a href="README.md">English</a> | <a href="README.ja.md">日本語</a>
+</p>
 
-## できること
+<p align="center">
+  <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-orange?logo=rust">
+  <img alt="Windows 11" src="https://img.shields.io/badge/platform-Windows%2011-blue">
+  <img alt="Cloudflare R2" src="https://img.shields.io/badge/storage-Cloudflare%20R2-f38020?logo=cloudflare">
+  <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-green">
+</p>
 
-- Cloudflare R2 へのファイルアップロード
-- 公開 URL の生成
-- クリップボードへの URL コピー
-- 複数ファイルの順次アップロード
-- MIME Type の自動判定
-- ULID を使った一意なファイル名生成
-- アップロード中の進捗バー表示
-- 終了前の Enter 待ち
+> [!NOTE]
+> This repository, including all code and documentation, was created with OpenCode.
 
-## 動作環境
+R2Share is built for the small but annoying moment where you need a shareable link to a local file right now. No dashboard, no upload form, no extra UI. Drop the file on `R2Share.exe`, wait for the upload to finish, then paste the URL wherever you need it.
 
-- Windows 11 を主対象
-- Rust
-- Cloudflare R2
-- Public Bucket と、そのバケットに向いた公開ドメイン
+## What it does
 
-## セットアップ
+| Feature | Behavior |
+| --- | --- |
+| Uploads files | Sends one or more local files to a Cloudflare R2 bucket. |
+| Generates public URLs | Builds URLs from `public_base_url` and the stored object key. |
+| Copies to clipboard | Copies successful URLs after the upload finishes. |
+| Handles batches | Uploads multiple files one by one and reports failures separately. |
+| Sets file metadata | Detects `Content-Type`, chooses `Content-Disposition`, and sets long cache headers. |
+| Keeps names unique | Stores files under a date path with a ULID file name. |
+| Stays open on Windows | Waits for Enter before closing, so drag and drop runs are readable. |
 
-### 1. 設定ファイルを用意する
+## Flow
 
-`r2share.toml.example` を参考に、`r2share.toml` を作成します。
+```mermaid
+flowchart LR
+    A[File path or drag and drop] --> B[R2Share.exe]
+    B --> C[Read r2share.toml]
+    C --> D[Upload to Cloudflare R2]
+    D --> E[Build public URL]
+    E --> F[Copy URL to clipboard]
+```
+
+## Requirements
+
+| Requirement | Notes |
+| --- | --- |
+| Windows 11 | The tool is mainly designed for drag and drop use on Windows. |
+| Rust | Needed when building from source. |
+| Cloudflare R2 | You need a bucket, access keys, and an S3-compatible endpoint. |
+| Public bucket or domain | R2Share assumes the uploaded object can be reached through `public_base_url`. |
+
+## Configuration
+
+Copy `r2share.toml.example` to `r2share.toml` and fill in your R2 values.
 
 ```toml
 bucket = "discord-files"
-endpoint = "https://YOUR_ACCOUNT_ID.r2.cloudflarestorage.com"
-access_key_id = "YOUR_ACCESS_KEY_ID"
-secret_access_key = "YOUR_SECRET_ACCESS_KEY"
+endpoint = "https://<account_id>.r2.cloudflarestorage.com"
+access_key_id = "<access_key_id>"
+secret_access_key = "<secret_access_key>"
 public_base_url = "https://files.example.com"
 default_prefix = "uploads"
 ```
 
-設定ファイルの探索順:
+R2Share checks for config in this order:
 
-1. 実行ファイルと同じディレクトリの `r2share.toml`
+1. `r2share.toml` next to `R2Share.exe`
 2. `%APPDATA%\R2Share\config.toml`
 
-通常の配布用 exe を使う場合は、`R2Share.exe` と同じフォルダに `r2share.toml` を置くのが簡単です。
+For a released exe, putting `r2share.toml` in the same folder as `R2Share.exe` is the least fussy option. During development, `%APPDATA%\R2Share\config.toml` is often easier because `cargo run` uses a build output directory.
 
-`cargo run` で開発中に試す場合は、`%APPDATA%\R2Share\config.toml` を使うと扱いやすいです。
-
-### 2. ビルドする
+## Build
 
 ```powershell
 cargo build --release
 ```
 
-生成物:
+The executable is written to:
 
-```txt
+```text
 target\release\R2Share.exe
 ```
 
-## 使い方
+## Use
 
-### 単一ファイルをアップロードする
+Upload one file:
 
 ```powershell
 R2Share.exe C:\path\to\video.mp4
 ```
 
-### 複数ファイルをアップロードする
+Upload several files:
 
 ```powershell
 R2Share.exe C:\path\to\image.png C:\path\to\archive.zip
 ```
 
-全件成功した場合は、生成された URL が改行区切りでクリップボードに入ります。
+Or just drag files onto `R2Share.exe` in Explorer. Windows passes those file paths as arguments, so the same upload path is used either way.
 
-### ドラッグ＆ドロップで使う
+When every upload succeeds, the generated URLs are copied to the clipboard as newline-separated text. If some files fail, R2Share still prints the successful URLs and lists the failed files.
 
-Windows では、ファイルを `R2Share.exe` にドラッグ＆ドロップすると、そのファイルパスが引数として渡されます。
+## Object keys and URLs
 
-そのため、CLI 実行と同じ処理でそのまま動きます。
+Uploaded files are stored with this object key shape:
 
-アップロード中は進捗バーが表示されます。処理完了後はウィンドウがすぐ閉じないように、`Press Enter to exit...` が表示され、Enter を押すまで終了しません。
-
-## URL 仕様
-
-アップロードされたファイルは、以下の形式の object key で保存されます。
-
-```txt
+```text
 uploads/YYYY/MM/DD/<ULID>.<ext>
 ```
 
-例:
+Example:
 
-```txt
+```text
 uploads/2026/05/03/01KQQ13CPYWS6AYYVVCRZ0N2CK.mp4
 ```
 
-公開 URL は `public_base_url` と object key を連結して生成します。
+The public URL is `public_base_url` plus the object key:
 
-例:
-
-```txt
+```text
 https://files.example.com/uploads/2026/05/03/01KQQ13CPYWS6AYYVVCRZ0N2CK.mp4
 ```
 
-## メタデータ
+## Upload headers
 
-アップロード時に、以下を設定します。
+| Header | Value |
+| --- | --- |
+| `Content-Type` | Detected from the extension, or `application/octet-stream` when unknown. |
+| `Content-Disposition` | `inline` for images, video, audio, text, JSON, XML, and PDF. Everything else uses `attachment`. |
+| `Cache-Control` | `public, max-age=31536000` |
 
-- `Content-Type`: 拡張子から自動判定。判定できない場合は `application/octet-stream`
-- `Content-Disposition`: 画像、動画、音声、テキスト、PDF などは `inline`。それ以外は `attachment`
-- `Cache-Control`: `public, max-age=31536000`
-
-## エラー時の挙動
-
-- アップロード失敗時は、理由をコンソールに表示します
-- クリップボードへのコピーに失敗しても、URL 自体はコンソールに表示されます
-- 一部のファイルだけ失敗した場合は、成功した URL と失敗したファイルをそれぞれ表示します
-
-## 開発用コマンド
+## Development
 
 ```powershell
 cargo fmt
@@ -126,30 +138,18 @@ cargo test
 cargo run -- C:\path\to\file.mp4
 ```
 
-## 注意事項
+## Safety notes
 
-- アップロード先は Public Bucket 想定です
-- URL を知っていれば誰でもアクセスできます
-- 機密ファイルのアップロードは想定していません
-- `secret_access_key` を含む設定ファイルは Git 管理しないでください
+R2Share is meant for public files. Anyone with the generated URL can open the uploaded object, so do not use it for secrets, private documents, or anything that should require authentication.
 
-## 現在の実装範囲
+The real config file contains `secret_access_key`; keep `r2share.toml` out of Git. This repository already ignores it.
 
-現時点で実装済み:
+## Status
 
-- `r2share.toml` の読み込み
-- 単一ファイルアップロード
-- 複数ファイルアップロード
-- ULID 付きファイル名生成
-- Content-Type 自動設定
-- Public URL 生成
-- クリップボードコピー
-- コンソール表示
-
-未実装:
-
-- Windows 通知
-- アップロード履歴
-- URL 削除機能
-- prefix の CLI 指定
-- GUI
+| Done | Not yet |
+| --- | --- |
+| Read `r2share.toml` | Windows notifications |
+| Upload one or more files | Upload history |
+| Generate ULID-based object keys | Delete uploaded URLs |
+| Set content headers | CLI prefix override |
+| Print and copy public URLs | GUI |
