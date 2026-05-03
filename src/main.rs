@@ -1,6 +1,8 @@
 use std::{
     env, fs,
+    io::{self, Write},
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
@@ -11,7 +13,10 @@ use aws_sdk_s3::{
     config::{Credentials, Region},
     primitives::ByteStream,
 };
+use aws_smithy_types::body::SdkBody;
 use chrono::Local;
+use http_body_util::BodyExt;
+use indicatif::{ProgressBar, ProgressStyle};
 use mime_guess::mime;
 use serde::Deserialize;
 use ulid::Ulid;
@@ -46,6 +51,7 @@ async fn main() {
         }
     };
 
+    wait_for_exit();
     std::process::exit(exit_code);
 }
 
@@ -57,9 +63,10 @@ async fn run() -> Result<()> {
 
     let mut uploaded_urls = Vec::new();
     let mut failed_files = Vec::new();
+    let total_files = file_args.len();
 
-    for file_arg in &file_args {
-        match upload_file(&client, &config, file_arg).await {
+    for (index, file_arg) in file_args.iter().enumerate() {
+        match upload_file(&client, &config, file_arg, index + 1, total_files).await {
             Ok(url) => {
                 println!("{url}");
                 uploaded_urls.push(url);
@@ -151,17 +158,25 @@ async fn build_s3_client(config: &Config) -> Client {
     Client::from_conf(sdk_config)
 }
 
-async fn upload_file(client: &Client, config: &Config, path: &Path) -> Result<String> {
+async fn upload_file(
+    client: &Client,
+    config: &Config,
+    path: &Path,
+    file_index: usize,
+    total_files: usize,
+) -> Result<String> {
     validate_input_file(path)?;
 
+    let file_size = fs::metadata(path)
+        .with_context(|| format!("Failed to read metadata for '{}'.", path.display()))?
+        .len();
     let content_type = guess_content_type(path);
     let content_disposition = select_content_disposition(&content_type);
     let object_key = build_object_key(config, path);
-    let body = ByteStream::from_path(path.to_path_buf())
-        .await
-        .with_context(|| format!("Failed to read file '{}'.", path.display()))?;
+    let progress_bar = create_upload_progress_bar(path, file_index, total_files, file_size)?;
+    let body = build_upload_body(path, progress_bar.clone()).await?;
 
-    client
+    let upload_result = client
         .put_object()
         .bucket(&config.bucket)
         .key(&object_key)
@@ -171,7 +186,24 @@ async fn upload_file(client: &Client, config: &Config, path: &Path) -> Result<St
         .cache_control(CACHE_CONTROL)
         .send()
         .await
-        .with_context(|| format!("Failed to upload '{}' to R2.", path.display()))?;
+        .with_context(|| format!("Failed to upload '{}' to R2.", path.display()));
+
+    match upload_result {
+        Ok(_) => {
+            progress_bar.set_position(file_size);
+            progress_bar.finish_with_message(format!(
+                "[{file_index}/{total_files}] Uploaded {}",
+                path_display_name(path)
+            ));
+        }
+        Err(err) => {
+            progress_bar.abandon_with_message(format!(
+                "[{file_index}/{total_files}] Failed {}",
+                path_display_name(path)
+            ));
+            return Err(err);
+        }
+    }
 
     Ok(build_public_url(&config.public_base_url, &object_key))
 }
@@ -234,12 +266,73 @@ fn build_public_url(public_base_url: &str, object_key: &str) -> String {
     )
 }
 
+fn create_upload_progress_bar(
+    path: &Path,
+    file_index: usize,
+    total_files: usize,
+    file_size: u64,
+) -> Result<ProgressBar> {
+    let progress_bar = ProgressBar::new(file_size);
+    progress_bar.set_style(
+        ProgressStyle::with_template(
+            "[{elapsed_precise}] {bar:40.cyan/blue} {bytes}/{total_bytes} {binary_bytes_per_sec} ETA {eta} {msg}",
+        )?
+        .progress_chars("##-"),
+    );
+    progress_bar.enable_steady_tick(Duration::from_millis(120));
+    progress_bar.set_message(format!(
+        "[{file_index}/{total_files}] {}",
+        path_display_name(path)
+    ));
+
+    Ok(progress_bar)
+}
+
+fn path_display_name(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| path.to_string_lossy().into_owned())
+}
+
+async fn build_upload_body(path: &Path, progress_bar: ProgressBar) -> Result<ByteStream> {
+    let byte_stream = ByteStream::from_path(path.to_path_buf())
+        .await
+        .with_context(|| format!("Failed to read file '{}'.", path.display()))?;
+
+    Ok(byte_stream.map(move |body| add_progress_to_sdk_body(body, progress_bar.clone())))
+}
+
+fn add_progress_to_sdk_body(body: SdkBody, progress_bar: ProgressBar) -> SdkBody {
+    body.map_preserve_contents(move |inner| {
+        let progress_bar = progress_bar.clone();
+        let mapped = inner.map_frame(move |frame| {
+            if let Some(data) = frame.data_ref() {
+                let next_position = progress_bar.position().saturating_add(data.len() as u64);
+                progress_bar
+                    .set_position(next_position.min(progress_bar.length().unwrap_or(u64::MAX)));
+            }
+            frame
+        });
+
+        SdkBody::from_body_1_x(mapped)
+    })
+}
+
 fn copy_urls_to_clipboard(urls: &[String]) {
     let text = urls.join("\n");
     match Clipboard::new().and_then(|mut clipboard| clipboard.set_text(text)) {
         Ok(()) => eprintln!("Copied {} URL(s) to the clipboard.", urls.len()),
         Err(err) => eprintln!("Clipboard copy failed: {err}"),
     }
+}
+
+fn wait_for_exit() {
+    eprint!("Press Enter to exit...");
+    let _ = io::stderr().flush();
+
+    let mut line = String::new();
+    let _ = io::stdin().read_line(&mut line);
 }
 
 #[cfg(test)]

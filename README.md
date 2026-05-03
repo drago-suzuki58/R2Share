@@ -12,6 +12,8 @@ Windows では `R2Share.exe` にファイルをドラッグ＆ドロップする
 - 複数ファイルの順次アップロード
 - MIME Type の自動判定
 - ULID を使った一意なファイル名生成
+- アップロード中の進捗バー表示
+- 終了前の Enter 待ち
 
 ## 動作環境
 
@@ -77,6 +79,8 @@ R2Share.exe C:\path\to\image.png C:\path\to\archive.zip
 Windows では、ファイルを `R2Share.exe` にドラッグ＆ドロップすると、そのファイルパスが引数として渡されます。
 
 そのため、CLI 実行と同じ処理でそのまま動きます。
+
+アップロード中は進捗バーが表示されます。処理完了後はウィンドウがすぐ閉じないように、`Press Enter to exit...` が表示され、Enter を押すまで終了しません。
 
 ## URL 仕様
 
