@@ -4,3 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1"
+arboard = "3"
+aws-config = "1"
+aws-sdk-s3 = "1"
+chrono = "0.4"
+mime_guess = "2"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+toml = "0.8"
+ulid = "1"
